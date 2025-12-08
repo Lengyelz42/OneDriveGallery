@@ -1,0 +1,1 @@
+This folder is for plugin assets such as banners, icons, or screenshots. Replace this placeholder with your actual assets as needed.
