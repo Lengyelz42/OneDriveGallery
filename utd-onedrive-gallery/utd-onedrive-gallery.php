@@ -3,7 +3,7 @@
 Plugin Name: UTD OneDrive Gallery Plugin
 Plugin URI: https://utd.hu/onedrive-gallery/
 Description: Displays an image/video gallery from a configured OneDrive folder.
-Version: 2.8.3
+Version: 2.8.4
 Author: Lengyel Zoltán
 License: GPL2
 */

@@ -376,6 +376,12 @@ add_action('wp_enqueue_scripts', function() {
     }
 
     function showMediaAt(index){
+        // Ensure mediaList reflects current DOM; rebuild if empty or out-of-date
+        var domList = Array.from(document.querySelectorAll('.onedrive-gallery-item img, .onedrive-gallery-item video'));
+        if (!mediaList || mediaList.length === 0 || mediaList.length !== domList.length) {
+            mediaList = domList;
+            mediaList.forEach(function(m, i){ m.dataset.odgIndex = i; });
+        }
         if (!mediaList || mediaList.length === 0) return;
         index = (index + mediaList.length) % mediaList.length;
         currentIndex = index;
@@ -565,13 +571,15 @@ add_action('wp_enqueue_scripts', function() {
                                 }
                             });
                             container.innerHTML = html;
-                            
+
                             // Show loader and use counters to detect when all images finished loading
                             showLoader(container);
                             var mediaEls = Array.from(container.querySelectorAll('img[data-odg-id], video[data-odg-id]'));
                             var total = mediaEls.length; var loaded = 0;
                             function markLoaded(el){
                                 loaded++;
+                                // remove per-item spinner if present
+                                try { var s = el.parentElement && el.parentElement.querySelector('.odg-item-spinner'); if (s) s.remove(); } catch(e){}
                                 layoutGalleryMasonry();
                                 if (loaded >= total) {
                                     hideLoader(container);
@@ -579,22 +587,44 @@ add_action('wp_enqueue_scripts', function() {
                                 }
                             }
                             if (total === 0) { hideLoader(container); initLightbox(); }
-                            mediaEls.forEach(function(el){
+
+                            // Attach per-item spinner and click handlers so individual images can open when ready
+                            mediaEls.forEach(function(el, idx){
+                                var parent = el.parentElement;
+                                try { parent.style.position = parent.style.position || parent.style.position; } catch(e){}
+                                // add a per-item spinner overlay
+                                var spinnerWrap = document.createElement('div'); spinnerWrap.className = 'odg-item-spinner'; spinnerWrap.setAttribute('aria-hidden','true'); spinnerWrap.innerHTML = '<div class="odg-spinner-mini" aria-hidden="true"></div>';
+                                parent.appendChild(spinnerWrap);
+
+                                // when this element loads/has metadata, remove spinner and mark loaded
                                 if (el.tagName.toLowerCase() === 'img') {
                                     if (el.complete) { markLoaded(el); }
                                     else { el.addEventListener('load', function(){ markLoaded(el); }); el.addEventListener('error', function(){ markLoaded(el); }); }
                                 } else if (el.tagName.toLowerCase() === 'video') {
-                                    // reveal play overlay when metadata/frame is available
                                     var overlay = el.parentElement ? el.parentElement.querySelector('.odg-play') : null;
-                                    if (el.readyState && el.readyState > 0) {
-                                        if (overlay) overlay.classList.add('visible');
-                                        markLoaded(el);
-                                    } else {
-                                        el.addEventListener('loadedmetadata', function(){ if (overlay) overlay.classList.add('visible'); markLoaded(el); });
-                                        el.addEventListener('error', function(){ markLoaded(el); });
+                                    if (el.readyState && el.readyState > 0) { if (overlay) overlay.classList.add('visible'); markLoaded(el); }
+                                    else { el.addEventListener('loadedmetadata', function(){ if (overlay) overlay.classList.add('visible'); markLoaded(el); }); el.addEventListener('error', function(){ markLoaded(el); }); }
+                                }
+
+                                // Attach click handler that opens lightbox only if this element is loaded
+                                el.addEventListener('click', function(e){
+                                    e.stopPropagation();
+                                    var isLoaded = (el.tagName.toLowerCase()==='img') ? el.complete : (el.readyState && el.readyState>0);
+                                    if (!isLoaded) {
+                                        // optionally indicate still loading (flash spinner)
+                                        try { spinnerWrap && (spinnerWrap.style.opacity = 1); setTimeout(function(){ spinnerWrap && (spinnerWrap.style.opacity = ''); }, 600); } catch(e){}
+                                        return;
                                     }
-                                } else { markLoaded(el); }
+                                    // build current media list from DOM so indices are correct
+                                    var all = Array.from(document.querySelectorAll('.onedrive-gallery-item img, .onedrive-gallery-item video'));
+                                    var pos = all.indexOf(el);
+                                    if (pos === -1) return;
+                                    mediaList = all;
+                                    mediaList.forEach(function(m, i){ m.dataset.odgIndex = i; });
+                                    openLightboxAtIndex(pos);
+                                });
                             });
+
                             // Ensure layout is run shortly in case images are cached and complete already
                             setTimeout(layoutGalleryMasonry, 50);
                         } else {
@@ -629,9 +659,16 @@ add_action('wp_enqueue_scripts', function() {
                             showLoader(container);
                             var mediaFix = Array.from(container.querySelectorAll('img[data-odg-id], video[data-odg-id]'));
                             var totalFix = mediaFix.length; var loadedFix = 0;
-                            function markLoadedFix(el){ if (el.tagName && el.tagName.toLowerCase() === 'img') el.classList.add('odg-loaded'); loadedFix++; if (loadedFix >= totalFix){ hideLoader(container); initLightbox(); } }
+                            function markLoadedFix(el){ if (el.tagName && el.tagName.toLowerCase() === 'img') el.classList.add('odg-loaded'); try { var s = el.parentElement && el.parentElement.querySelector('.odg-item-spinner'); if (s) s.remove(); } catch(e){} loadedFix++; if (loadedFix >= totalFix){ hideLoader(container); initLightbox(); } }
                             if (totalFix === 0) { hideLoader(container); initLightbox(); }
+
+                            // Attach per-item spinner and click handlers similar to proportional view
                             mediaFix.forEach(function(el){
+                                var parent = el.parentElement;
+                                try { parent.style.position = parent.style.position || parent.style.position; } catch(e){}
+                                var spinnerWrap = document.createElement('div'); spinnerWrap.className = 'odg-item-spinner'; spinnerWrap.setAttribute('aria-hidden','true'); spinnerWrap.innerHTML = '<div class="odg-spinner-mini" aria-hidden="true"></div>';
+                                parent.appendChild(spinnerWrap);
+
                                 var tag = (el.tagName || '').toLowerCase();
                                 if (tag === 'img') {
                                     if (el.complete) { markLoadedFix(el); }
@@ -643,6 +680,22 @@ add_action('wp_enqueue_scripts', function() {
                                 } else {
                                     markLoadedFix(el);
                                 }
+
+                                // Click handler opens lightbox when individual item is loaded
+                                el.addEventListener('click', function(e){
+                                    e.stopPropagation();
+                                    var isLoaded = (el.tagName.toLowerCase()==='img') ? el.complete : (el.readyState && el.readyState>0);
+                                    if (!isLoaded) {
+                                        try { spinnerWrap && (spinnerWrap.style.opacity = 1); setTimeout(function(){ spinnerWrap && (spinnerWrap.style.opacity = ''); }, 600); } catch(e){}
+                                        return;
+                                    }
+                                    var all = Array.from(document.querySelectorAll('.onedrive-gallery-item img, .onedrive-gallery-item video'));
+                                    var pos = all.indexOf(el);
+                                    if (pos === -1) return;
+                                    mediaList = all;
+                                    mediaList.forEach(function(m, i){ m.dataset.odgIndex = i; });
+                                    openLightboxAtIndex(pos);
+                                });
                             });
                         }
                     })
@@ -687,6 +740,10 @@ JS;
         ".odg-loading{width:100%;display:flex;justify-content:center;align-items:center;padding:8px 0;box-sizing:border-box;}\n" .
         ".odg-spinner{width:28px;height:28px;border:4px solid rgba(255,255,255,0.18);border-top-color:#ffffff;border-radius:50%;animation:odg-spin 1s linear infinite;}\n" .
         "@keyframes odg-spin{to{transform:rotate(360deg);}}\n";
+
+    // Per-item spinner (centered in each tile)
+    $css .= ".odg-item-spinner{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:3;pointer-events:none;opacity:1;transition:opacity 200ms ease;}" .
+        ".odg-spinner-mini{width:20px;height:20px;border:3px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:odg-spin 1s linear infinite;}";
 
     // Modal control styles: black circular buttons fixed to viewport edges
     $css .= "\n/* Lightbox controls - fixed to viewport edges */\n" .
