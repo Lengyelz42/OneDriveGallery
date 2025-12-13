@@ -17,12 +17,13 @@ add_action('init', function() {
         "var registerBlockType = wp.blocks.registerBlockType;\n" .
         "var TextControl = wp.components.TextControl;\n" .
         "var ToggleControl = wp.components.ToggleControl;\n" .
+        "var SelectControl = wp.components.SelectControl;\n" .
         "var useBlockProps = (wp.blockEditor && wp.blockEditor.useBlockProps) ? wp.blockEditor.useBlockProps : (wp.editor && wp.editor.useBlockProps) ? wp.editor.useBlockProps : function(){ return {}; };\n" .
         "registerBlockType('utd-onedrive-gallery/gallery', {\n" .
             "title: wp.i18n.__('OneDrive Gallery','utd-onedrive-gallery'),\n" .
             "icon: 'format-gallery',\n" .
             "category: 'widgets',\n" .
-            "attributes: { folder: { type: 'string', default: '' }, prop: { type: 'boolean', default: false }, irp: { type: 'string', default: '' } },\n" .
+            "attributes: { folder: { type: 'string', default: '' }, prop: { type: 'boolean', default: false }, irp: { type: 'string', default: '' }, show_caption: { type: 'boolean', default: null }, caption_source: { type: 'string', default: '' } },\n" .
             "edit: function(props){\n" .
                 "var bp = useBlockProps();\n" .
                 "var attrs = props.attributes || {};\n" .
@@ -31,7 +32,9 @@ add_action('init', function() {
     $editor_js .= "\n" .
         "        el(TextControl, { label: wp.i18n.__('Folder','utd-onedrive-gallery'), value: attrs.folder, onChange: function(v){ props.setAttributes({ folder: v }); } }),\n" .
         "        el(ToggleControl, { label: wp.i18n.__('Proportional view (prop)','utd-onedrive-gallery'), checked: !!attrs.prop, onChange: function(v){ props.setAttributes({ prop: !!v }); } }),\n" .
-        "        el(TextControl, { label: wp.i18n.__('Images per row (irp)','utd-onedrive-gallery'), value: attrs.irp || '', type: 'number', onChange: function(v){ props.setAttributes({ irp: v }); }, help: wp.i18n.__('Enter an integer 1-12 to override the Images Per Row setting for this block instance.','utd-onedrive-gallery') })\n" .
+        "        el(TextControl, { label: wp.i18n.__('Images per row (irp)','utd-onedrive-gallery'), value: attrs.irp || '', type: 'number', onChange: function(v){ props.setAttributes({ irp: v }); }, help: wp.i18n.__('Enter an integer 1-12 to override the Images Per Row setting for this block instance.','utd-onedrive-gallery') }),\n" .
+        "        el(ToggleControl, { label: wp.i18n.__('Show caption in lightbox (override)','utd-onedrive-gallery'), checked: attrs.show_caption === null ? false : !!attrs.show_caption, onChange: function(v){ props.setAttributes({ show_caption: v }); }, help: wp.i18n.__('Optional: override the site setting to show captions for this block instance. Leave unset to use global setting.','utd-onedrive-gallery') }),\n" .
+        "        el(SelectControl, { label: wp.i18n.__('Caption source (override)','utd-onedrive-gallery'), value: attrs.caption_source || '', options: [ { label: 'EXIF', value: 'EXIF' }, { label: 'Filename', value: 'FILENAME' }, { label: 'JSON', value: 'JSON' }, { label: 'None', value: 'NONE' } ], onChange: function(v){ props.setAttributes({ caption_source: v }); }, help: wp.i18n.__('Optional: choose caption source for this block instance. Leave empty to use site default.','utd-onedrive-gallery') })\n" .
         "    );\n" .
         "},\n" .
             "save: function(){ return null; }\n" .
@@ -52,6 +55,13 @@ function utd_onedrive_gallery_block_render($attributes) {
     // Forward block attributes to shortcode: prop (true/false) and irp (images per row override)
     if (isset($attributes['prop'])) {
         $atts['prop'] = $attributes['prop'] ? 'true' : 'false';
+    }
+    if (isset($attributes['show_caption'])) {
+        // explicitly pass show_caption as true/false string
+        $atts['show_caption'] = $attributes['show_caption'] ? 'true' : 'false';
+    }
+    if (isset($attributes['caption_source']) && $attributes['caption_source'] !== '') {
+        $atts['caption_source'] = sanitize_text_field($attributes['caption_source']);
     }
     if (isset($attributes['irp']) && $attributes['irp'] !== '') {
         $atts['ipr'] = sanitize_text_field($attributes['irp']);
@@ -134,6 +144,9 @@ function utd_onedrive_gallery_shortcode($atts) {
         'id' => '',
         'folder' => '',
         'prop' => '',
+        // optional per-shortcode caption controls
+        'show_caption' => '',
+        'caption_source' => '',
         // ipr: images-per-row override for this shortcode instance (1-12)
         'ipr' => '',
     ), $atts, 'onedrive_gallery');
@@ -156,6 +169,17 @@ function utd_onedrive_gallery_shortcode($atts) {
     $images_per_row = intval($options['images_per_row'] ?? 3);
     if ($images_per_row < 1) $images_per_row = 1;
 
+    // Shortcode-level caption overrides: optional. If not provided, fall back to global settings.
+    $short_show_caption = null;
+    if (isset($atts['show_caption']) && $atts['show_caption'] !== '') {
+        $v = strtolower(trim($atts['show_caption']));
+        $short_show_caption = ($v === 'true' || $v === '1' || $v === 'on' || $v === 'yes') ? true : false;
+    }
+    $short_caption_source = '';
+    if (!empty($atts['caption_source'])) {
+        $short_caption_source = strtoupper(trim($atts['caption_source']));
+    }
+
     // Shortcode override: ipr (images per row) or irp (alternate name) — integer between 1 and 12
     $short_ipr = '';
     if (!empty($atts['ipr'])) $short_ipr = trim($atts['ipr']);
@@ -171,7 +195,11 @@ function utd_onedrive_gallery_shortcode($atts) {
 
     // Never fetch items or download URLs server-side. Always render an empty container with folder name;
     // client-side JS will build the appropriate view (proportional or same-size) using AJAX for metadata only.
-    $out = '<div class="onedrive-gallery-grid" data-odg-folder="' . esc_attr($atts['folder'] ?? '') . '" data-odg-proportional="' . ($load_images ? '1' : '0') . '" style="--odg-images-per-row:' . $images_per_row . '"></div>';
+    // Determine final per-instance caption settings: prefer shortcode attr, otherwise plugin settings
+    $final_show_caption = isset($short_show_caption) ? $short_show_caption : (!empty($options['show_image_description']));
+    $final_caption_source = $short_caption_source ?: strtoupper(trim($options['caption_source'] ?? 'EXIF'));
+
+    $out = '<div class="onedrive-gallery-grid" data-odg-folder="' . esc_attr($atts['folder'] ?? '') . '" data-odg-proportional="' . ($load_images ? '1' : '0') . '" data-odg-show-caption="' . ($final_show_caption ? '1' : '0') . '" data-odg-caption-source="' . esc_attr($final_caption_source) . '" style="--odg-images-per-row:' . $images_per_row . '"></div>';
     return $out;
 
 }
@@ -189,13 +217,15 @@ add_action('wp_enqueue_scripts', function() {
     $opt = get_option('utd_onedrive_gallery_settings');
     $load_images_flag = isset($opt['load_images']) ? boolval($opt['load_images']) : false;
     $show_desc = !empty($opt['show_image_description']) ? true : false;
-    $use_filename = !empty($opt['use_filename']) ? true : false;
+    $caption_source = strtoupper(trim($opt['caption_source'] ?? 'EXIF'));
+    $exif_code = $opt['exif_code'] ?? 'XPTitle';
     wp_localize_script('utd-onedrive-frontend-lite', 'UTD_ODG_AJAX', array(
         'ajax_url' => admin_url('admin-ajax.php'),
         'nonce' => wp_create_nonce('utd_onedrive_gallery_load'),
         'load_images' => $load_images_flag,
         'show_image_description' => $show_desc,
-        'use_filename' => $use_filename,
+        'caption_source' => $caption_source,
+        'exif_code' => $exif_code,
     ));
 
     // Add the runtime that swaps data-odg-src -> src on load and provides a simple lightbox
@@ -245,7 +275,12 @@ add_action('wp_enqueue_scripts', function() {
                 try{
                     var tags = EXIF.readFromBinaryFile(arr) || {};
                     // Prefer ImageDescription, then Windows XP comment (XPComment), then UserComment
-                    var raw = tags.ImageDescription || tags['ImageDescription'] || tags.XPComment || tags['XPComment'] || tags.UserComment || tags.Comment || tags.Description || null;
+                    var raw = null;
+                    if (typeof UTD_ODG_AJAX !== 'undefined' && UTD_ODG_AJAX.exif_code) {
+                        // try the configured EXIF key first
+                        try { raw = tags[UTD_ODG_AJAX.exif_code] || tags[UTD_ODG_AJAX.exif_code.replace(/^0x/i,'')] || null; } catch(e){ raw = null; }
+                    }
+                    raw = raw || tags.ImageDescription || tags['ImageDescription'] || tags.XPComment || tags['XPComment'] || tags.UserComment || tags.Comment || tags.Description || null;
                     var value = '';
                     if (raw == null) {
                         value = '';
@@ -428,20 +463,33 @@ add_action('wp_enqueue_scripts', function() {
         // caption (lightbox bottom bar) - controlled by settings
         var title = mediaEl.getAttribute('data-odg-title') || '';
         var captionText = '';
-        if (typeof UTD_ODG_AJAX !== 'undefined' && UTD_ODG_AJAX.show_image_description) {
-            if (UTD_ODG_AJAX.use_filename) {
-                // prefer data-odg-name (set from server) or fallback to filename from URL
+        // Determine per-item/show caption preference: media attribute overrides page/global
+        var mediaShowCaptionAttr = mediaEl.getAttribute('data-odg-show-caption');
+        var mediaCaptionSourceAttr = mediaEl.getAttribute('data-odg-caption-source');
+        var mediaShowCaption = null;
+        if (typeof mediaShowCaptionAttr !== 'undefined' && mediaShowCaptionAttr !== null && mediaShowCaptionAttr !== '') {
+            mediaShowCaption = (String(mediaShowCaptionAttr) === '1' || String(mediaShowCaptionAttr).toLowerCase() === 'true');
+        }
+        var mediaCapSource = mediaCaptionSourceAttr || '';
+        // Fallback to global localized settings if not present on item
+        var finalShowCaption = (mediaShowCaption !== null) ? mediaShowCaption : (typeof UTD_ODG_AJAX !== 'undefined' && !!UTD_ODG_AJAX.show_image_description);
+        var finalCapSource = (mediaCapSource && mediaCapSource.length) ? String(mediaCapSource).toUpperCase() : (typeof UTD_ODG_AJAX !== 'undefined' ? (UTD_ODG_AJAX.caption_source || 'EXIF') : 'EXIF');
+        // If caption source is explicitly NONE, do not show captions regardless of the show flag
+        if (String(finalCapSource).toUpperCase() === 'NONE') {
+            finalShowCaption = false;
+        }
+        if (finalShowCaption) {
+            if (finalCapSource === 'FILENAME') {
                 captionText = mediaEl.getAttribute('data-odg-name') || '';
                 if (!captionText) {
                     var fn = (mediaEl.getAttribute('data-odg-url') || mediaEl.src || '').split('/').pop() || '';
                     captionText = fn.replace(/\.[^/.]+$/, '');
-                } else {
-                    // strip extension if present on server-provided name
-                    captionText = String(captionText).replace(/\.[^/.]+$/, '');
-                }
+                } else { captionText = String(captionText).replace(/\.[^/.]+$/, ''); }
+            } else if (finalCapSource === 'JSON') {
+                captionText = '';
             } else {
-                // When not using filename as caption, only use an explicit title (do not fall back to server filename)
-                captionText = title || '';
+                // EXIF: leave captionText empty — fetchAndShowExif will populate if available
+                captionText = '';
             }
         }
 
@@ -461,9 +509,9 @@ add_action('wp_enqueue_scripts', function() {
         if (tag === 'img') {
             // prefer realUrl (full download URL) when available
             var exifUrl = realUrl || thumbUrl;
-            // Only attempt client-side EXIF read if captions are enabled
+            // Only attempt client-side EXIF read if captions are enabled AND caption source is EXIF
             try {
-                if (typeof UTD_ODG_AJAX !== 'undefined' && UTD_ODG_AJAX.show_image_description) {
+                if (typeof finalShowCaption !== 'undefined' && finalShowCaption && (String(finalCapSource || 'EXIF').toUpperCase() === 'EXIF')) {
                     fetchAndShowExif(exifUrl);
                 }
             } catch(e){ console.error('EXIF fetch call failed', e); }
@@ -547,26 +595,30 @@ add_action('wp_enqueue_scripts', function() {
                         if (isProportional) {
                             // Build proportional view: create items with data-odg-id and optional dimensions
                             var html = '';
+                            var parentShowCaption = container.getAttribute('data-odg-show-caption') || '';
+                            var parentCaptionSource = container.getAttribute('data-odg-caption-source') || '';
+                            var parentShowCaption = container.getAttribute('data-odg-show-caption') || '';
+                            var parentCaptionSource = container.getAttribute('data-odg-caption-source') || '';
                             idsMeta.forEach(function(m){
                                 var type = m.type || 'image';
                                 var src = (m.url && m.url.length) ? m.url : 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
                                 if (type === 'video') {
-                                    html += '<div class="onedrive-gallery-item" data-type="video">';
+                                    html += '<div class="onedrive-gallery-item" data-type="video" data-odg-show-caption="' + escAttr(parentShowCaption) + '" data-odg-caption-source="' + escAttr(parentCaptionSource) + '">';
                                     html += '<video muted playsinline preload="metadata" loop data-odg-id="' + (m.id||'') + '"';
                                     if (m.url && m.url.length) html += ' data-odg-url="' + m.url + '"';
                                     if (m.name) html += ' data-odg-name="' + escAttr(m.name) + '"';
                                     if (m.w && m.h) html += ' data-odg-width="'+m.w+'" data-odg-height="'+m.h+'"';
-                                    html += '><source src="' + src + '" type="video/mp4"></video>';
+                                    html += ' data-odg-show-caption="' + escAttr(parentShowCaption) + '" data-odg-caption-source="' + escAttr(parentCaptionSource) + '"><source src="' + src + '" type="video/mp4"></video>';
                                     // Play overlay (non-interactive so clicks pass through to video)
                                     html += '<div class="odg-play" aria-hidden="true"></div>';
                                     html += '</div>';
                                 } else {
-                                    html += '<div class="onedrive-gallery-item" data-type="image">';
+                                    html += '<div class="onedrive-gallery-item" data-type="image" data-odg-show-caption="' + escAttr(parentShowCaption) + '" data-odg-caption-source="' + escAttr(parentCaptionSource) + '">';
                                     html += '<img src="' + src + '" data-odg-id="' + (m.id||'') + '"';
                                     if (m.w && m.h) html += ' data-odg-width="'+m.w+'" data-odg-height="'+m.h+'"';
                                     if (m.url && m.url.length) html += ' data-odg-url="' + m.url + '"';
                                     if (m.name) html += ' data-odg-name="' + escAttr(m.name) + '"';
-                                    html += ' loading="lazy">';
+                                    html += ' data-odg-show-caption="' + escAttr(parentShowCaption) + '" data-odg-caption-source="' + escAttr(parentCaptionSource) + '" loading="lazy">';
                                     html += '</div>';
                                 }
                             });
@@ -630,6 +682,8 @@ add_action('wp_enqueue_scripts', function() {
                         } else {
                             // Build same-size view: 4:3 ratio boxes, images fill width and crop overflow
                             var html = '';
+                            var parentShowCaption = container.getAttribute('data-odg-show-caption') || '';
+                            var parentCaptionSource = container.getAttribute('data-odg-caption-source') || '';
                             idsMeta.forEach(function(m){
                                 var type = m.type || 'image';
                                 var src = (m.url && m.url.length) ? m.url : 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';

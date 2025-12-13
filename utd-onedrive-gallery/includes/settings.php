@@ -26,8 +26,15 @@ add_action('admin_notices', function() {
             . '<li><code>prop</code>: <code>true</code> or <code>false</code>. If set, overrides the default proportional view setting. <br>'
             . 'When <code>prop="true"</code>, gallery shows proportional view. When <code>prop="false"</code>, gallery uses same-size thumbnails.</li>'
             . '<li><code>ipr</code>: Integer from <code>1</code> to <code>8</code>. Overrides the global "Images Per Row" setting for this shortcode instance. Example: <code>ipr="4"</code>.</li>'
+            . '<li><code>show_caption</code>: Optional <code>true</code> or <code>false</code>. When provided on the shortcode or block instance, this overrides the global "Show Image Description" setting for that gallery only. Example: <code>show_caption="false"</code>.</li>'
+            . '<li><code>caption_source</code>: Optional caption source for the gallery instance. Allowed values: <code>EXIF</code>, <code>FILENAME</code>, <code>JSON</code>, or <code>NONE</code>. When provided it overrides the site default for that gallery. Examples: <code>caption_source="FILENAME"</code> or <code>caption_source="NONE"</code>.</li>'
             . '</ul>'
-            . '<p><strong>Example:</strong> <code>[onedrive_gallery folder="Photos" prop="false"]</code></p>'
+            . '<p><strong>Examples:</strong></p>'
+            . '<ul>'
+            . '<li><code>[onedrive_gallery folder="Photos" prop="false"]</code> — basic example.</li>'
+            . '<li><code>[onedrive_gallery folder="Photos/2025" show_caption="true" caption_source="EXIF"]</code> — forces captions on and uses EXIF for that gallery only.</li>'
+            . '<li><code>[onedrive_gallery folder="Docs" show_caption="false" caption_source="NONE"]</code> — disables captions for this gallery instance.</li>'
+            . '</ul>'
             . '</div>';
     }
 });
@@ -94,9 +101,17 @@ function utd_onedrive_gallery_settings_init() {
     );
 
     add_settings_field(
-        'utd_onedrive_use_filename',
-        __('Use Filename as caption (without extension)', 'utd-onedrive-gallery'),
-        'utd_onedrive_gallery_use_filename_render',
+        'utd_onedrive_caption_source',
+        __('Caption source', 'utd-onedrive-gallery'),
+        'utd_onedrive_gallery_caption_source_render',
+        'utd-onedrive-gallery',
+        'utd_onedrive_gallery_section_general'
+    );
+
+    add_settings_field(
+        'utd_onedrive_exif_code',
+        __('EXIF code / key', 'utd-onedrive-gallery'),
+        'utd_onedrive_gallery_exif_code_render',
         'utd-onedrive-gallery',
         'utd_onedrive_gallery_section_general'
     );
@@ -134,6 +149,29 @@ function utd_onedrive_gallery_use_filename_render() {
     ?>
     <label><input type='checkbox' name='utd_onedrive_gallery_settings[use_filename]' value='1' <?php checked($val, true); ?> /> <?php esc_html_e('Use filename as caption (without extension)', 'utd-onedrive-gallery'); ?></label>
     <p class='description'>When enabled, the filename (with extension removed) will be used if no other caption source is available.</p>
+    <?php
+}
+
+function utd_onedrive_gallery_caption_source_render() {
+    $options = get_option('utd_onedrive_gallery_settings');
+    $val = strtoupper(trim($options['caption_source'] ?? 'EXIF'));
+    $opts = array('EXIF' => 'EXIF', 'FILENAME' => 'Filename', 'JSON' => 'JSON (metadata)', 'NONE' => 'None');
+    ?>
+    <select name='utd_onedrive_gallery_settings[caption_source]'>
+        <?php foreach ($opts as $k => $label) : ?>
+            <option value='<?php echo esc_attr($k); ?>' <?php selected($val, $k); ?>><?php echo esc_html($label); ?></option>
+        <?php endforeach; ?>
+    </select>
+    <p class='description'>Choose the source for the lightbox caption bar when <em>Show Image Description</em> is enabled. Selecting <strong>None</strong> disables captions regardless of the global setting.</p>
+    <?php
+}
+
+function utd_onedrive_gallery_exif_code_render() {
+    $options = get_option('utd_onedrive_gallery_settings');
+    $val = $options['exif_code'] ?? 'XPTitle';
+    ?>
+    <input type='text' name='utd_onedrive_gallery_settings[exif_code]' value='<?php echo esc_attr($val); ?>' style='width:220px;' />
+    <p class='description'>EXIF tag key to prefer when reading EXIF captions (default: <code>XPTitle</code>). Useful when your camera or processing tool stores captions in custom EXIF fields.</p>
     <?php
 }
 
@@ -258,8 +296,11 @@ function utd_onedrive_gallery_settings_sanitize($input) {
 
     // Booleans (checkboxes) - ensure false when unchecked (missing from $input)
     $out['show_image_description'] = !empty($input['show_image_description']) ? 1 : 0;
-    $out['use_filename'] = !empty($input['use_filename']) ? 1 : 0;
     $out['load_images'] = !empty($input['load_images']) ? 1 : 0;
+
+    // Caption source and EXIF code
+    $out['caption_source'] = isset($input['caption_source']) ? strtoupper(sanitize_text_field($input['caption_source'])) : ($existing['caption_source'] ?? 'EXIF');
+    $out['exif_code'] = isset($input['exif_code']) ? sanitize_text_field($input['exif_code']) : ($existing['exif_code'] ?? 'XPTitle');
 
     // Preserve tokens if present in existing settings (do not clobber)
     if (!empty($existing['graph_tokens'])) $out['graph_tokens'] = $existing['graph_tokens'];
