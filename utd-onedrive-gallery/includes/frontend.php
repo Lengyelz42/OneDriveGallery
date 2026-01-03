@@ -1,4 +1,5 @@
 <?php
+if ( ! defined( 'ABSPATH' ) ) exit;
 
 // Frontend: shortcode and minimal post-load JS for deferred image loading
 
@@ -10,7 +11,7 @@ add_action('init', function() {
 add_action('init', function() {
     // Editor script handle (empty src; we'll add inline JS using WP globals so no build step required)
     $handle = 'utd-onedrive-block-editor';
-    wp_register_script($handle, '', array('wp-blocks','wp-element','wp-i18n','wp-editor','wp-components'), null);
+    wp_register_script($handle, '', array('wp-blocks','wp-element','wp-i18n','wp-editor','wp-components'), '2.8.5', true);
 
     $editor_js = "(function(wp){\n" .
         "var el = wp.element.createElement;\n" .
@@ -207,11 +208,17 @@ function utd_onedrive_gallery_shortcode($atts) {
 // Enqueue minimal frontend script & styles (small payload). This script runs after page load and kicks off image downloads.
 add_action('wp_enqueue_scripts', function() {
     $dir = plugin_dir_url(__FILE__) . '../assets/';
-    // Register a small inline script file path (we'll enqueue an inline script to keep footprint tiny)
-    wp_register_script('utd-onedrive-frontend-lite', '', array(), null, true);
 
-    // Localize or pass minimal settings if needed
+    // Register and enqueue exif-js locally
+    wp_register_script('utd-onedrive-exif-js', $dir . 'exif.js', array(), '2.3.0', true);
+    wp_enqueue_script('utd-onedrive-exif-js');
+
+    // Register a small inline script file path (we'll enqueue an inline script to keep footprint tiny)
+    wp_register_script('utd-onedrive-frontend-lite', '', array('utd-onedrive-exif-js'), '2.8.5', true);
     wp_enqueue_script('utd-onedrive-frontend-lite');
+
+    // Pass the local exif-js URL to the frontend
+    wp_add_inline_script('utd-onedrive-frontend-lite', 'var utdOnedriveExifJsUrl = "' . esc_js($dir . 'exif.js') . '";', 'before');
 
     // Localize AJAX endpoint + nonce for runtime and expose caption settings
     $opt = get_option('utd_onedrive_gallery_settings');
@@ -246,15 +253,20 @@ add_action('wp_enqueue_scripts', function() {
         });
     }
 
-    // Load exif-js library dynamically (from CDN) and call callback when ready
+    // Load exif-js library dynamically from local plugin assets and call callback when ready
     function loadExifJs(cb){
         if (window.EXIF) return cb && cb();
-        var src = 'https://cdn.jsdelivr.net/npm/exif-js';
+        var src = (typeof utdOnedriveExifJsUrl !== 'undefined') ? utdOnedriveExifJsUrl : '';
+        if (!src) {
+            console.warn('Exif-js URL not set. Please enqueue exif-js locally and set utdOnedriveExifJsUrl.');
+            cb && cb(new Error('no_exif_url'));
+            return;
+        }
         var s = document.querySelector('script[data-odg-exif]');
         if (s){ s.addEventListener('load', function(){ cb && cb(); }); return; }
         s = document.createElement('script'); s.src = src; s.async = true; s.setAttribute('data-odg-exif','1');
         s.onload = function(){ cb && cb(); };
-        s.onerror = function(){ console.warn('Failed to load exif-js from CDN'); cb && cb(new Error('load_failed')); };
+        s.onerror = function(){ console.warn('Failed to load exif-js from local assets'); cb && cb(new Error('load_failed')); };
         document.head.appendChild(s);
     }
 
@@ -771,7 +783,7 @@ JS;
     // No debug info displayed on frontend.
 
     // Minimal styles (you can expand or keep them inlined elsewhere)
-    wp_register_style('utd-onedrive-frontend-style', false);
+    wp_register_style('utd-onedrive-frontend-style', false, array(), '2.8.5');
     wp_enqueue_style('utd-onedrive-frontend-style');
 
     // Gallery CSS - unified for all views, works across all browsers including Edge/tablets/phones

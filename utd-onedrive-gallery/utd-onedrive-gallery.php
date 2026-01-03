@@ -1,6 +1,8 @@
 <?php
+if ( ! defined( 'ABSPATH' ) ) exit;
+
 /*
-Plugin Name: UTD OneDrive Gallery Plugin
+Plugin Name: UTD OneDrive Gallery
 Plugin URI: https://utd.hu/onedrive-gallery/
 Description: Displays an image/video gallery from a configured OneDrive folder.
 Version: 2.8.5
@@ -23,7 +25,8 @@ function utd_onedrive_gallery_register_block() {
 		'utd-onedrive-gallery-block',
 		plugins_url('assets/block.js', __FILE__),
 		array('wp-blocks', 'wp-element', 'wp-i18n', 'wp-block-editor'),
-		filemtime(plugin_dir_path(__FILE__).'assets/block.js')
+		filemtime(plugin_dir_path(__FILE__).'assets/block.js'),
+		true
 	);
 }
 
@@ -242,6 +245,13 @@ function utd_onedrive_graph_api_get($path) {
 // See includes/frontend.php for the implementation.
 
 function utd_onedrive_gallery_settings_page() {
+	// Nonce verification for settings save (POST)
+	if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+		$wpnonce = isset($_POST['_wpnonce']) ? sanitize_text_field(wp_unslash($_POST['_wpnonce'])) : '';
+		if (empty($wpnonce) || !wp_verify_nonce($wpnonce, 'utd-onedrive-gallery-options')) {
+			wp_die(esc_html__('Security check failed. Please reload the page and try again.', 'utd-onedrive-gallery'));
+		}
+	}
 	?>
 	<div class="wrap">
 		<h1>OneDrive Gallery Settings</h1>
@@ -338,48 +348,53 @@ function utd_onedrive_gallery_settings_page() {
 			})();
 			</script>
 			<?php
-			// Handle OAuth callback (code)
-			if (isset($_GET['code']) && isset($_GET['state'])) {
-				$state = get_option('utd_onedrive_graph_oauth_state');
-				if ($_GET['state'] !== $state) {
-					echo '<div class="notice notice-error"><p>' . esc_html__('OAuth state mismatch.','utd-onedrive-gallery') . '</p></div>';
-				} else {
-					$res = utd_onedrive_graph_exchange_code(sanitize_text_field($_GET['code']));
-					if (is_wp_error($res)) {
-						echo '<div class="notice notice-error"><p>' . esc_html__('Failed to connect to Microsoft: ','utd-onedrive-gallery') . esc_html($res->get_error_message()) . '</p></div>';
+				// Handle OAuth callback (code)
+				if (isset($_GET['code']) && isset($_GET['state'])) {
+					$state = get_option('utd_onedrive_graph_oauth_state');
+					$get_state = isset($_GET['state']) ? sanitize_text_field(wp_unslash($_GET['state'])) : '';
+					$get_code = isset($_GET['code']) ? sanitize_text_field(wp_unslash($_GET['code'])) : '';
+					if ($get_state !== $state) {
+						echo '<div class="notice notice-error"><p>' . esc_html__('OAuth state mismatch.','utd-onedrive-gallery') . '</p></div>';
 					} else {
-						echo '<div class="notice notice-success"><p>' . esc_html__('Connected to Microsoft successfully.','utd-onedrive-gallery') . '</p></div>';
+						$res = utd_onedrive_graph_exchange_code($get_code);
+						if (is_wp_error($res)) {
+							echo '<div class="notice notice-error"><p>' . esc_html__('Failed to connect to Microsoft: ','utd-onedrive-gallery') . esc_html($res->get_error_message()) . '</p></div>';
+						} else {
+							echo '<div class="notice notice-success"><p>' . esc_html__('Connected to Microsoft successfully.','utd-onedrive-gallery') . '</p></div>';
+						}
 					}
 				}
-			}
-			// Handle disconnect
-			if (isset($_GET['disconnect_graph']) && !empty($_GET['_wpnonce']) && wp_verify_nonce($_GET['_wpnonce'], 'utd_onedrive_disconnect')) {
-				$settings = get_option('utd_onedrive_gallery_settings');
-				unset($settings['graph_tokens']);
-				update_option('utd_onedrive_gallery_settings', $settings);
-				echo '<div class="notice notice-success"><p>' . esc_html__('Disconnected from Microsoft.','utd-onedrive-gallery') . '</p></div>';
-			}
+				// Handle disconnect
+				if (isset($_GET['disconnect_graph']) && !empty($_GET['_wpnonce'])) {
+					$get_wpnonce = sanitize_text_field(wp_unslash($_GET['_wpnonce']));
+					if (wp_verify_nonce($get_wpnonce, 'utd_onedrive_disconnect')) {
+						$settings = get_option('utd_onedrive_gallery_settings');
+						unset($settings['graph_tokens']);
+						update_option('utd_onedrive_gallery_settings', $settings);
+						echo '<div class="notice notice-success"><p>' . esc_html__('Disconnected from Microsoft.','utd-onedrive-gallery') . '</p></div>';
+					}
+				}
 			?>
 		</form>
 	</div>
 	<?php
 
-	// If user clicked the Graph test button, call a simple Graph endpoint and show raw JSON
-	if (isset($_GET['test_graph']) && !empty($_GET['_wpnonce']) && wp_verify_nonce($_GET['_wpnonce'], 'utd_onedrive_test_graph')) {
-		echo '<h2>' . esc_html__('Microsoft Graph API Test','utd-onedrive-gallery') . '</h2>';
-		$resp = utd_onedrive_graph_api_get('/me/drive/root');
-		if (is_wp_error($resp)) {
-			echo '<div class="notice notice-error"><p>' . esc_html__('Graph test failed: ','utd-onedrive-gallery') . esc_html($resp->get_error_message()) . '</p></div>';
-		} else {
-			$json = wp_json_encode($resp, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-			echo '<div class="notice notice-success"><p>' . esc_html__('Successfully connected to Microsoft Graph!','utd-onedrive-gallery') . '</p></div>';
-			echo '<p>' . esc_html__('Raw Graph response from /me/drive/root:','utd-onedrive-gallery') . '</p>';
-			echo '<textarea rows="10" style="width:100%;">' . esc_textarea($json) . '</textarea>';
+		// If user clicked the Graph test button, call a simple Graph endpoint and show raw JSON
+		if (isset($_GET['test_graph']) && !empty($_GET['_wpnonce'])) {
+			$get_test_wpnonce = sanitize_text_field(wp_unslash($_GET['_wpnonce']));
+			if (wp_verify_nonce($get_test_wpnonce, 'utd_onedrive_test_graph')) {
+				echo '<h2>' . esc_html__('Microsoft Graph API Test','utd-onedrive-gallery') . '</h2>';
+				$resp = utd_onedrive_graph_api_get('/me/drive/root');
+				if (is_wp_error($resp)) {
+					echo '<div class="notice notice-error"><p>' . esc_html__('Graph test failed: ','utd-onedrive-gallery') . esc_html($resp->get_error_message()) . '</p></div>';
+				} else {
+					$json = wp_json_encode($resp, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+					echo '<div class="notice notice-success"><p>' . esc_html__('Successfully connected to Microsoft Graph!','utd-onedrive-gallery') . '</p></div>';
+					echo '<p>' . esc_html__('Raw Graph response from /me/drive/root:','utd-onedrive-gallery') . '</p>';
+					echo '<textarea rows="10" style="width:100%;">' . esc_textarea($json) . '</textarea>';
+				}
+			}
 		}
-	}
-
-
-	
 }
 
 /**

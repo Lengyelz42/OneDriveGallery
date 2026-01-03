@@ -1,4 +1,6 @@
 <?php
+if ( ! defined( 'ABSPATH' ) ) exit;
+
 // Settings UI for UTD OneDrive Gallery - loaded only in admin
 
 // Add admin menu for OneDrive settings
