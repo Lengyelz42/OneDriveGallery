@@ -359,9 +359,14 @@ add_action('wp_enqueue_scripts', function() {
     }
 
     // Masonry-like layout: place items into N columns (images_per_row) and stack items to minimize vertical gaps.
-    function layoutGalleryMasonry() {
+    function layoutGalleryMasonry(container) {
         try {
-            var container = document.querySelector('.onedrive-gallery-grid');
+            // If no container passed, layout all galleries on the page
+            if (!container) {
+                var allContainers = document.querySelectorAll('.onedrive-gallery-grid[data-odg-proportional="1"]');
+                allContainers.forEach(function(c){ layoutGalleryMasonry(c); });
+                return;
+            }
             if (!container) return;
             // Only apply masonry when there are image elements (load_images mode)
             var items = Array.from(container.querySelectorAll('.onedrive-gallery-item'));
@@ -644,7 +649,7 @@ add_action('wp_enqueue_scripts', function() {
                                 loaded++;
                                 // remove per-item spinner if present
                                 try { var s = el.parentElement && el.parentElement.querySelector('.odg-item-spinner'); if (s) s.remove(); } catch(e){}
-                                layoutGalleryMasonry();
+                                layoutGalleryMasonry(container);
                                 if (loaded >= total) {
                                     hideLoader(container);
                                     initLightbox();
@@ -690,7 +695,7 @@ add_action('wp_enqueue_scripts', function() {
                             });
 
                             // Ensure layout is run shortly in case images are cached and complete already
-                            setTimeout(layoutGalleryMasonry, 50);
+                            setTimeout(function(){ layoutGalleryMasonry(container); }, 50);
                         } else {
                             // Build same-size view: 4:3 ratio boxes, images fill width and crop overflow
                             var html = '';
